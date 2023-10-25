@@ -60,6 +60,7 @@ pub struct LyonTranslationError;
 /// ```
 pub struct LyonWriter {
     paths: Vec<SvgPath>,
+    global_transform: Option<SvgTransform>,
 }
 
 /// Utility function to build a [`Stroke`].
@@ -111,7 +112,10 @@ fn min_an_max(
 
 impl LyonWriter {
     pub fn new() -> Self {
-        Self { paths: Vec::new() }
+        Self {
+            paths: Vec::new(),
+            global_transform: None,
+        }
     }
 
     /// Add a [`Path`] to the writer and translate it (eager).
@@ -122,10 +126,17 @@ impl LyonWriter {
         stroke: Option<Stroke>,
         transform: Option<SvgTransform>,
     ) -> Result<(), LyonTranslationError> {
-        Ok(self.paths.push(
+        self.paths.push(
             lyon_path_to_svg_with_attributes(path, fill, stroke, transform)
                 .ok_or(LyonTranslationError)?,
-        ))
+        );
+        Ok(())
+    }
+
+    /// Add/replace a [`SvgTransform`], which will be applied to the whole SVG as a group.
+    pub fn with_transform(mut self, trans: SvgTransform) -> Self {
+        self.global_transform = Some(trans);
+        self
     }
 
     /// Write the contained [`Path`]s to an SVG at `file_path`.
@@ -158,10 +169,17 @@ impl LyonWriter {
 
         // the root node of a tree must be a Group
         let root_node = usvg::Node::new(NodeKind::Group(Group::default()));
+        // we append everything to a "real" group node
+        let group_node = usvg::Node::new(NodeKind::Group(Group {
+            transform: self.global_transform.unwrap_or_default(),
+            ..Default::default()
+        }));
 
         for path in self.paths {
-            root_node.append(usvg::Node::new(NodeKind::Path(path)));
+            group_node.append(usvg::Node::new(NodeKind::Path(path)));
         }
+        root_node.append(group_node);
+
         let tree = Tree {
             size: Size::from_wh(width, height).ok_or(LyonTranslationError)?,
             view_box: ViewBox {
@@ -172,8 +190,7 @@ impl LyonWriter {
             root: root_node,
         };
 
-        let mut output =
-            std::fs::File::create::<P>(file_path.into()).map_err(|_| LyonTranslationError)?;
+        let mut output = std::fs::File::create::<P>(file_path).map_err(|_| LyonTranslationError)?;
         write!(output, "{}", tree.to_string(&XmlOptions::default()))
             .map_err(|_| LyonTranslationError)?;
         Ok(())
@@ -201,7 +218,7 @@ fn lyon_path_to_usvg(path: &Path) -> Option<PathData> {
     for event in path.iter() {
         match event {
             Event::Begin { at } => {
-                current = Some(at.clone());
+                current = Some(at);
                 upath_builder.move_to(at.x, at.y)
             }
             Event::Line { from, to } => {
@@ -211,7 +228,7 @@ fn lyon_path_to_usvg(path: &Path) -> Option<PathData> {
                     }
                 }
                 upath_builder.line_to(to.x, to.y);
-                current = Some(to.clone())
+                current = Some(to)
             }
             Event::Quadratic { from, ctrl, to } => {
                 if let Some(current_point) = current {
@@ -221,7 +238,7 @@ fn lyon_path_to_usvg(path: &Path) -> Option<PathData> {
                 }
                 // TODO: check if ctrl is that one
                 upath_builder.quad_to(ctrl.x, ctrl.y, to.x, to.y);
-                current = Some(to.clone())
+                current = Some(to)
             }
             Event::Cubic {
                 from,
@@ -236,7 +253,7 @@ fn lyon_path_to_usvg(path: &Path) -> Option<PathData> {
                 }
                 // TODO: check if ctrl is that one
                 upath_builder.cubic_to(ctrl1.x, ctrl1.y, ctrl2.x, ctrl2.y, to.x, to.y);
-                current = Some(to.clone())
+                current = Some(to)
             }
             Event::End { last, first, close } => {
                 if let Some(current_point) = current {
@@ -248,7 +265,7 @@ fn lyon_path_to_usvg(path: &Path) -> Option<PathData> {
                     upath_builder.line_to(first.x, first.y);
                     upath_builder.close();
                 }
-                current = Some(last.clone())
+                current = Some(last)
             }
         }
     }
