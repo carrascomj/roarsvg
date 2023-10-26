@@ -9,11 +9,12 @@ use std::io::Write;
 
 use usvg::tiny_skia_path::{Path as PathData, PathBuilder};
 use usvg::{
-    AspectRatio, Group, NodeKind, NonZeroRect, Opacity, Paint, Path as SvgPath, Size, TreeWriting,
-    ViewBox, XmlOptions,
+    AlignmentBaseline, AspectRatio, DominantBaseline, Font, Group, LengthAdjust,
+    NonZeroPositiveF32, NonZeroRect, Opacity, Paint, PaintOrder, Path as SvgPath, Size, TextAnchor,
+    TextChunk, TextRendering, TextSpan, TreeWriting, ViewBox, WritingMode, XmlOptions,
 };
-pub use usvg::{Color, Fill, Stroke, Transform as SvgTransform};
-use usvg::{StrokeWidth, Tree};
+pub use usvg::{Color, Fill, NodeKind, Stroke, Transform as SvgTransform};
+use usvg::{StrokeWidth, Text, Tree};
 
 #[derive(Debug)]
 pub struct LyonTranslationError;
@@ -59,7 +60,7 @@ pub struct LyonTranslationError;
 /// # std::fs::remove_file(&file_path).unwrap();
 /// ```
 pub struct LyonWriter {
-    paths: Vec<SvgPath>,
+    nodes: Vec<NodeKind>,
     global_transform: Option<SvgTransform>,
 }
 
@@ -113,7 +114,7 @@ fn min_an_max(
 impl LyonWriter {
     pub fn new() -> Self {
         Self {
-            paths: Vec::new(),
+            nodes: Vec::new(),
             global_transform: None,
         }
     }
@@ -126,11 +127,75 @@ impl LyonWriter {
         stroke: Option<Stroke>,
         transform: Option<SvgTransform>,
     ) -> Result<(), LyonTranslationError> {
-        self.paths.push(
+        self.nodes.push(NodeKind::Path(
             lyon_path_to_svg_with_attributes(path, fill, stroke, transform)
                 .ok_or(LyonTranslationError)?,
-        );
+        ));
         Ok(())
+    }
+
+    /// Add [`Text`] to the writer, filling it as an unique [`TextChunk`] whose
+    /// [`TextSpan`] style applies to all the text.
+    pub fn push_text(
+        &mut self,
+        text: String,
+        font_families: Vec<String>,
+        font_size: f32,
+        transform: SvgTransform,
+        fill: Option<Fill>,
+        stroke: Option<Stroke>,
+    ) -> Result<(), LyonTranslationError> {
+        let text_len = text.len();
+        self.nodes.push(NodeKind::Text(Text {
+            id: "".to_string(),
+            positions: Vec::new(),
+            rotate: Vec::new(),
+            transform,
+            rendering_mode: TextRendering::GeometricPrecision,
+            writing_mode: WritingMode::LeftToRight,
+            chunks: vec![TextChunk {
+                x: None,
+                y: None,
+                text,
+                anchor: TextAnchor::Start,
+                text_flow: usvg::TextFlow::Linear,
+                spans: vec![TextSpan {
+                    start: 0,
+                    end: 1,
+                    fill,
+                    stroke,
+                    paint_order: PaintOrder::FillAndStroke,
+                    font: Font {
+                        families: font_families,
+                        style: usvg::FontStyle::Normal,
+                        stretch: usvg::FontStretch::Normal,
+                        weight: 1,
+                    },
+                    font_size: NonZeroPositiveF32::new(font_size).ok_or(LyonTranslationError)?,
+                    small_caps: false,
+                    apply_kerning: false,
+                    decoration: usvg::TextDecoration {
+                        underline: None,
+                        overline: None,
+                        line_through: None,
+                    },
+                    baseline_shift: Vec::new(),
+                    letter_spacing: 0.12,
+                    word_spacing: 0.12,
+                    text_length: Some(text_len as f32),
+                    length_adjust: LengthAdjust::Spacing,
+                    visibility: usvg::Visibility::Visible,
+                    dominant_baseline: DominantBaseline::Auto,
+                    alignment_baseline: AlignmentBaseline::Auto,
+                }],
+            }],
+        }));
+        Ok(())
+    }
+
+    /// Push a node kind without any indirection.
+    pub fn push_node(&mut self, node: NodeKind) {
+        self.nodes.push(node);
     }
 
     /// Add/replace a [`SvgTransform`], which will be applied to the whole SVG as a group.
@@ -141,19 +206,24 @@ impl LyonWriter {
 
     /// Write the contained [`Path`]s to an SVG at `file_path`.
     pub fn write<P: AsRef<std::path::Path>>(
-        self,
+        mut self,
         file_path: P,
     ) -> Result<(), LyonTranslationError> {
+        let match_node = |node: &NodeKind| match node {
+            NodeKind::Path(path) => Some(path.data.bounds()),
+            NodeKind::Text(_text) => None,
+            _ => unreachable!(),
+        };
         // calculate dimensions
         let (min_x, max_x, min_y, max_y) = self
-            .paths
+            .nodes
             .iter()
-            .map(|path| path.data.bounds())
+            .filter_map(match_node)
             .fold((0f32, 0f32, 0f32, 0f32), min_an_max);
         let (total_x, total_y) =
-            self.paths
+            self.nodes
                 .iter()
-                .map(|path| path.data.bounds())
+                .filter_map(match_node)
                 .fold((0., 0.), |(acc_x, acc_y), b| {
                     (
                         acc_x + (b.right() + b.left()) / 2.,
@@ -161,8 +231,8 @@ impl LyonWriter {
                     )
                 });
         let (center_x, center_y) = (
-            total_x / self.paths.len() as f32,
-            total_y / self.paths.len() as f32,
+            total_x / self.nodes.len() as f32,
+            total_y / self.nodes.len() as f32,
         );
         let width = max_x - min_x;
         let height = max_y - min_y;
@@ -175,8 +245,17 @@ impl LyonWriter {
             ..Default::default()
         }));
 
-        for path in self.paths {
-            group_node.append(usvg::Node::new(NodeKind::Path(path)));
+        use std::cmp::Ordering::*;
+        self.nodes.sort_unstable_by(|a, b| match (a, b) {
+            (NodeKind::Text(_), NodeKind::Path(_)) => Greater,
+            (NodeKind::Path(_), NodeKind::Text(_)) => Less,
+            (NodeKind::Path(p1), NodeKind::Path(p2)) => (2 * p1.fill.is_some() as u8
+                + p1.stroke.is_some() as u8)
+                .cmp(&(2 * p2.fill.is_some() as u8 + p2.stroke.is_some() as u8)),
+            _ => Equal,
+        });
+        for path in self.nodes {
+            group_node.append(usvg::Node::new(path));
         }
         root_node.append(group_node);
 
