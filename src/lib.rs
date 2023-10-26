@@ -9,7 +9,7 @@ use std::io::Write;
 
 use usvg::tiny_skia_path::{Path as PathData, PathBuilder};
 use usvg::{
-    AlignmentBaseline, AspectRatio, DominantBaseline, Font, Group, LengthAdjust,
+    AlignmentBaseline, AspectRatio, CharacterPosition, DominantBaseline, Font, Group, LengthAdjust,
     NonZeroPositiveF32, NonZeroRect, Opacity, Paint, PaintOrder, Path as SvgPath, Size, TextAnchor,
     TextChunk, TextRendering, TextSpan, TreeTextToPath, TreeWriting, ViewBox, WritingMode,
     XmlOptions,
@@ -219,7 +219,22 @@ impl<T> LyonWriter<T> {
         })
     }
 
+    /// Loads fonts from a font database, enabling writing [`Text`] (`push_text`).
     pub fn add_fonts<Fp: FontProvider>(self, fonts: Fp) -> LyonWriter<Option<Fp>> {
+        LyonWriter {
+            nodes: self.nodes,
+            global_transform: self.global_transform,
+            fontdb: Some(fonts),
+        }
+    }
+
+    /// Loads fonts from a font directory, building a [`FontProvider`] and enabling writing text.
+    pub fn add_fonts_dir<P: AsRef<std::path::Path>>(
+        self,
+        font_dir: P,
+    ) -> LyonWriter<Option<usvg::fontdb::Database>> {
+        let mut fonts = usvg::fontdb::Database::new();
+        fonts.load_fonts_dir(font_dir);
         LyonWriter {
             nodes: self.nodes,
             global_transform: self.global_transform,
@@ -322,7 +337,14 @@ impl<T: FontProvider> LyonWriter<Option<T>> {
         let text_len = text.len();
         self.nodes.push(NodeKind::Text(Text {
             id: "".to_string(),
-            positions: Vec::new(),
+            positions: (0..text_len)
+                .map(|c| CharacterPosition {
+                    x: Some(c as f32),
+                    y: None,
+                    dx: None,
+                    dy: None,
+                })
+                .collect(),
             rotate: Vec::new(),
             transform,
             rendering_mode: TextRendering::GeometricPrecision,
@@ -335,7 +357,7 @@ impl<T: FontProvider> LyonWriter<Option<T>> {
                 text_flow: usvg::TextFlow::Linear,
                 spans: vec![TextSpan {
                     start: 0,
-                    end: 1,
+                    end: text_len,
                     fill,
                     stroke,
                     paint_order: PaintOrder::FillAndStroke,
@@ -355,10 +377,10 @@ impl<T: FontProvider> LyonWriter<Option<T>> {
                         line_through: None,
                     },
                     baseline_shift: Vec::new(),
-                    letter_spacing: 0.12,
-                    word_spacing: 0.12,
-                    text_length: Some(text_len as f32),
-                    length_adjust: LengthAdjust::Spacing,
+                    letter_spacing: 0.0,
+                    word_spacing: 0.0,
+                    text_length: None,
+                    length_adjust: LengthAdjust::SpacingAndGlyphs,
                     visibility: usvg::Visibility::Visible,
                     dominant_baseline: DominantBaseline::Auto,
                     alignment_baseline: AlignmentBaseline::Auto,
