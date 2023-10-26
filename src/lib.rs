@@ -255,6 +255,12 @@ impl LyonWriter<NoText> {
     }
 }
 
+impl Default for LyonWriter<NoText> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Marker trait that changes the behavior of `write` for [`LyonWriter`]
 /// and allows for writing text to the SVG.
 pub trait FontProvider {
