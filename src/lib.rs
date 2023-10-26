@@ -9,10 +9,10 @@ use std::io::Write;
 
 use usvg::tiny_skia_path::{Path as PathData, PathBuilder};
 use usvg::{
-    AlignmentBaseline, AspectRatio, CharacterPosition, DominantBaseline, Font, Group, LengthAdjust,
-    NonZeroPositiveF32, NonZeroRect, Opacity, Paint, PaintOrder, Path as SvgPath, Size, TextAnchor,
-    TextChunk, TextRendering, TextSpan, TreeTextToPath, TreeWriting, ViewBox, WritingMode,
-    XmlOptions,
+    AlignmentBaseline, AspectRatio, CharacterPosition, DominantBaseline, Font, Group,
+    ImageRendering, LengthAdjust, NonZeroPositiveF32, NonZeroRect, Opacity, Paint, PaintOrder,
+    Path as SvgPath, Size, TextAnchor, TextChunk, TextRendering, TextSpan, TreeTextToPath,
+    TreeWriting, ViewBox, WritingMode, XmlOptions,
 };
 pub use usvg::{Color, Fill, NodeKind, Stroke, Transform as SvgTransform};
 use usvg::{StrokeWidth, Text, Tree};
@@ -142,6 +142,31 @@ impl<T> LyonWriter<T> {
         self.nodes.push(node);
     }
 
+    /// Push an vector (formatted by the caller) as a PNG.
+    ///
+    /// For writing Text, call first [`Self::add_fonts`] and call `push_text` instead.
+    pub fn push_png(
+        &mut self,
+        data: &[u8],
+        transform: SvgTransform,
+        width: f32,
+        height: f32,
+    ) -> Result<(), LyonTranslationError> {
+        self.nodes.push(NodeKind::Image(usvg::Image {
+            id: "".to_string(),
+            kind: usvg::ImageKind::PNG(std::sync::Arc::new(data.into())),
+            transform,
+            visibility: usvg::Visibility::Visible,
+            view_box: ViewBox {
+                rect: NonZeroRect::from_xywh(transform.tx, transform.ty, width, height)
+                    .ok_or(LyonTranslationError::WrongBoundingBox)?,
+                aspect: AspectRatio::default(),
+            },
+            rendering_mode: ImageRendering::default(),
+        }));
+        Ok(())
+    }
+
     /// Add/replace a [`SvgTransform`], which will be applied to the whole SVG as a group.
     pub fn with_transform(mut self, trans: SvgTransform) -> Self {
         self.global_transform = Some(trans);
@@ -153,6 +178,7 @@ impl<T> LyonWriter<T> {
         let match_node = |node: &NodeKind| match node {
             NodeKind::Path(path) => Some(path.data.bounds()),
             NodeKind::Text(_text) => None,
+            NodeKind::Image(usvg::Image { view_box: vbox, .. }) => Some(vbox.rect.to_rect()),
             _ => unreachable!(),
         };
         // calculate dimensions
@@ -196,6 +222,8 @@ impl<T> LyonWriter<T> {
 
         use std::cmp::Ordering::*;
         self.nodes.sort_unstable_by(|a, b| match (a, b) {
+            (NodeKind::Image(_), _) => Greater,
+            (_, NodeKind::Image(_)) => Less,
             (NodeKind::Text(_), NodeKind::Path(_)) => Greater,
             (NodeKind::Path(_), NodeKind::Text(_)) => Less,
             (NodeKind::Path(p1), NodeKind::Path(p2)) => (2 * p1.fill.is_some() as u8
