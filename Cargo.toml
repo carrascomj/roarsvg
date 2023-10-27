@@ -1,6 +1,6 @@
 [package]
 name = "roarsvg"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "SVG deserialization for lyon_path."
@@ -19,7 +19,6 @@ usvg = "0.36.0"
 wasm-bindgen = { version = "0.2.84", features = ["serde", "serde-serialize"] }
 console_error_panic_hook = "0.1"
 wasm-bindgen-futures = "0.4.33"
-async-std = "1.12.0"
 js-sys = "0.3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]

@@ -508,10 +508,7 @@ impl<T: FontProvider> LyonWriter<Option<T>> {
         self,
         font_source: &[u8],
     ) -> LyonWriter<Option<usvg::fontdb::Database>> {
-        let mut fonts = self
-            .fontdb
-            .map(|f| f.get_fontdb())
-            .unwrap_or_else(usvg::fontdb::Database::new);
+        let mut fonts = self.fontdb.map(|f| f.get_fontdb()).unwrap_or_default();
         fonts.load_font_data(font_source.to_vec());
         LyonWriter {
             nodes: self.nodes,

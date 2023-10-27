@@ -25,7 +25,6 @@ pub fn to_file<P: AsRef<Path>>(tree: usvg::Tree, file_path: P) -> Result<(), Lyo
             let file_path = file_path.as_ref().to_owned();
             use wasm_bindgen::{JsCast, JsValue};
             let svg = tree.to_string(&XmlOptions::default());
-            web_sys::console::log_1(&svg.clone().into());
             let blob = web_sys::Blob::new_with_str_sequence(&js_sys::Array::from_iter(
                 std::iter::once(JsValue::from_str(svg.as_str())),
             ))
