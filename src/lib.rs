@@ -10,9 +10,9 @@ use std::io::Write;
 use usvg::tiny_skia_path::{Path as PathData, PathBuilder};
 use usvg::{
     AlignmentBaseline, AspectRatio, CharacterPosition, DominantBaseline, Font, Group,
-    ImageRendering, LengthAdjust, NonZeroPositiveF32, NonZeroRect, Opacity, Paint, PaintOrder,
-    Path as SvgPath, Size, TextAnchor, TextChunk, TextRendering, TextSpan, TreeTextToPath,
-    TreeWriting, ViewBox, WritingMode, XmlOptions,
+    ImageRendering, LengthAdjust, NodeExt, NonZeroPositiveF32, NonZeroRect, Opacity, Paint,
+    PaintOrder, Path as SvgPath, Size, TextAnchor, TextChunk, TextRendering, TextSpan,
+    TreeTextToPath, TreeWriting, ViewBox, WritingMode, XmlOptions,
 };
 pub use usvg::{Color, Fill, NodeKind, Stroke, Transform as SvgTransform};
 use usvg::{StrokeWidth, Text, Tree};
@@ -183,31 +183,13 @@ impl<T> LyonWriter<T> {
 
     /// Build [`Tree`] before writing.
     fn prepare(mut self) -> Result<Tree, LyonTranslationError> {
-        let match_node = |node: &usvg::Node| match &*node.borrow() {
-            NodeKind::Path(path) => Some(path.data.bounds()),
-            NodeKind::Image(usvg::Image { view_box: vbox, .. }) => Some(vbox.rect.to_rect()),
-            NodeKind::Text(_) | NodeKind::Group(_) => None,
-        };
+        let match_node = |node: &usvg::Node| node.calculate_bbox();
         // calculate dimensions
-        let (min_x, max_x, min_y, max_y) = self
+        let (min_x, max_x, max_y, min_y) = self
             .nodes
             .iter()
             .filter_map(match_node)
             .fold((0f32, 0f32, 0f32, 0f32), min_an_max);
-        let (total_x, total_y) =
-            self.nodes
-                .iter()
-                .filter_map(match_node)
-                .fold((0., 0.), |(acc_x, acc_y), b| {
-                    (
-                        acc_x + (b.right() + b.left()) / 2.,
-                        acc_y + (b.bottom() + b.top()) / 2.,
-                    )
-                });
-        let (center_x, center_y) = (
-            total_x / self.nodes.len() as f32,
-            total_y / self.nodes.len() as f32,
-        );
         let width = if max_x - min_x > 0. {
             max_x - min_x
         } else {
@@ -249,7 +231,7 @@ impl<T> LyonWriter<T> {
         Ok(Tree {
             size: Size::from_wh(width, height).ok_or(LyonTranslationError::WrongBoundingBox)?,
             view_box: ViewBox {
-                rect: NonZeroRect::from_xywh(center_x, center_y, width, height)
+                rect: NonZeroRect::from_ltrb(min_x, max_y, max_x, min_y)
                     .ok_or(LyonTranslationError::WrongBoundingBox)?,
                 aspect: AspectRatio::default(),
             },
@@ -433,6 +415,22 @@ impl<T: FontProvider> LyonWriter<Option<T>> {
     /// let mut fontdb = usvg::fontdb::Database::new();
     /// fontdb.load_system_fonts();
     /// let mut writer = writer.add_fonts(fontdb);
+    /// // first we add a Path, if not, the ViewBox calculation will panic!
+    /// // this is a caveat and should be fixed in the future
+    /// let mut path_builder = Path::builder();
+    /// path_builder.begin(Point2D::origin());
+    /// path_builder.line_to(
+    ///     Point2D::new(3.0, 2.0),
+    /// );
+    /// path_builder.end(true);
+    /// writer
+    ///     .push(
+    ///         &path_builder.build(),
+    ///         None,
+    ///         Some(stroke(Color::black(), 1.0, 1.0)),
+    ///         Some(SvgTransform::from_translate(2.0, 2.0)),
+    ///     )
+    ///     .expect("Path 1 should be writable!");
     ///
     /// // push the created path with some fill and stroke, in the origin
     /// writer
