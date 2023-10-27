@@ -5,17 +5,18 @@
 use std::rc::Rc;
 
 use lyon_path::{Event, Path};
-use std::io::Write;
 
 use usvg::tiny_skia_path::{Path as PathData, PathBuilder};
 use usvg::{
     AlignmentBaseline, AspectRatio, CharacterPosition, DominantBaseline, Font, Group,
     ImageRendering, LengthAdjust, NodeExt, NonZeroPositiveF32, NonZeroRect, Opacity, Paint,
     PaintOrder, Path as SvgPath, Size, TextAnchor, TextChunk, TextRendering, TextSpan,
-    TreeTextToPath, TreeWriting, ViewBox, WritingMode, XmlOptions,
+    TreeTextToPath, ViewBox, WritingMode,
 };
 pub use usvg::{Color, Fill, NodeKind, Stroke, Transform as SvgTransform};
 use usvg::{StrokeWidth, Text, Tree};
+mod io;
+use io::to_file;
 
 #[derive(Debug)]
 pub enum LyonTranslationError {
@@ -392,10 +393,7 @@ impl LyonWriter<NoText> {
         file_path: P,
     ) -> Result<(), LyonTranslationError> {
         let tree = self.prepare()?;
-        let mut output = std::fs::File::create::<P>(file_path)
-            .map_err(|e| LyonTranslationError::IoWrite(Box::new(e)))?;
-        write!(output, "{}", tree.to_string(&XmlOptions::default()))
-            .map_err(|e| LyonTranslationError::IoWrite(Box::new(e)))?;
+        to_file(tree, file_path)?;
         Ok(())
     }
 }
@@ -504,11 +502,7 @@ impl<T: FontProvider> LyonWriter<Option<T>> {
             .get_fontdb();
         let mut tree = self.prepare()?;
         tree.convert_text(&fontdb);
-        let mut output = std::fs::File::create::<P>(file_path)
-            .map_err(|e| LyonTranslationError::IoWrite(Box::new(e)))?;
-
-        write!(output, "{}", tree.to_string(&XmlOptions::default()))
-            .map_err(|e| LyonTranslationError::IoWrite(Box::new(e)))?;
+        to_file(tree, file_path)?;
         Ok(())
     }
 }
