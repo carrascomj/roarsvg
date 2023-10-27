@@ -396,6 +396,20 @@ impl LyonWriter<NoText> {
         to_file(tree, file_path)?;
         Ok(())
     }
+
+    /// Loads fonts from a font file, building a [`FontProvider`] and enabling writing text.
+    pub fn add_fonts_source(
+        self,
+        font_source: &[u8],
+    ) -> LyonWriter<Option<usvg::fontdb::Database>> {
+        let mut fonts = usvg::fontdb::Database::new();
+        fonts.load_font_data(font_source.to_vec());
+        LyonWriter {
+            nodes: self.nodes,
+            global_transform: self.global_transform,
+            fontdb: Some(fonts),
+        }
+    }
 }
 
 impl Default for LyonWriter<NoText> {
@@ -487,6 +501,23 @@ impl<T: FontProvider> LyonWriter<Option<T>> {
             font_size,
         )?));
         Ok(())
+    }
+
+    /// Loads fonts from a font file, building a [`FontProvider`] if needed and enabling writing text.
+    pub fn add_fonts_source(
+        self,
+        font_source: &[u8],
+    ) -> LyonWriter<Option<usvg::fontdb::Database>> {
+        let mut fonts = self
+            .fontdb
+            .map(|f| f.get_fontdb())
+            .unwrap_or_else(usvg::fontdb::Database::new);
+        fonts.load_font_data(font_source.to_vec());
+        LyonWriter {
+            nodes: self.nodes,
+            global_transform: self.global_transform,
+            fontdb: Some(fonts),
+        }
     }
 
     /// Write the contained [`Path`]s to an SVG at `file_path`, converting all [`Text`] nodes
