@@ -19,7 +19,12 @@ use usvg::{StrokeWidth, Text, Tree};
 
 #[derive(Debug)]
 pub enum LyonTranslationError {
-    WrongBoundingBox,
+    WrongBoundingBox {
+        min_x: f32,
+        max_x: f32,
+        min_y: f32,
+        max_y: f32,
+    },
     NoFonts,
     SvgFailure,
     FontFailure,
@@ -185,7 +190,7 @@ impl<T> LyonWriter<T> {
     fn prepare(mut self) -> Result<Tree, LyonTranslationError> {
         let match_node = |node: &usvg::Node| node.calculate_bbox();
         // calculate dimensions
-        let (min_x, max_x, max_y, min_y) = self
+        let (min_x, max_x, min_y, max_y) = self
             .nodes
             .iter()
             .filter_map(match_node)
@@ -193,12 +198,12 @@ impl<T> LyonWriter<T> {
         let width = if max_x - min_x > 0. {
             max_x - min_x
         } else {
-            2.0
+            256.0
         };
         let height = if max_y - min_y > 0. {
             max_y - min_y
         } else {
-            2.0
+            256.0
         };
 
         // the root node of a tree must be a Group
@@ -229,10 +234,21 @@ impl<T> LyonWriter<T> {
         root_node.append(group_node);
 
         Ok(Tree {
-            size: Size::from_wh(width, height).ok_or(LyonTranslationError::WrongBoundingBox)?,
+            size: Size::from_wh(width, height).ok_or(LyonTranslationError::WrongBoundingBox {
+                min_x,
+                max_x,
+                min_y,
+                max_y,
+            })?,
             view_box: ViewBox {
-                rect: NonZeroRect::from_ltrb(min_x, max_y, max_x, min_y)
-                    .ok_or(LyonTranslationError::WrongBoundingBox)?,
+                rect: NonZeroRect::from_ltrb(min_x, min_y, max_x, max_y).ok_or(
+                    LyonTranslationError::WrongBoundingBox {
+                        min_x,
+                        max_x,
+                        min_y,
+                        max_y,
+                    },
+                )?,
                 aspect: AspectRatio::default(),
             },
             root: root_node,
@@ -278,8 +294,14 @@ pub fn create_png_node(
         transform: SvgTransform::identity(),
         visibility: usvg::Visibility::Visible,
         view_box: ViewBox {
-            rect: NonZeroRect::from_xywh(transform.tx, transform.ty, width, height)
-                .ok_or(LyonTranslationError::WrongBoundingBox)?,
+            rect: NonZeroRect::from_xywh(transform.tx, transform.ty, width, height).ok_or(
+                LyonTranslationError::WrongBoundingBox {
+                    min_x: transform.tx - width / 2.,
+                    max_x: transform.tx + width / 2.,
+                    min_y: transform.ty - height / 2.,
+                    max_y: transform.ty + height / 2.,
+                },
+            )?,
             aspect: AspectRatio::default(),
         },
         rendering_mode: ImageRendering::default(),
