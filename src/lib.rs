@@ -67,7 +67,7 @@ pub enum LyonTranslationError {
 /// # std::fs::remove_file(&file_path).unwrap();
 /// ```
 pub struct LyonWriter<T> {
-    nodes: Vec<NodeKind>,
+    nodes: Vec<usvg::Node>,
     global_transform: Option<SvgTransform>,
     fontdb: T,
 }
@@ -128,10 +128,10 @@ impl<T> LyonWriter<T> {
         stroke: Option<Stroke>,
         transform: Option<SvgTransform>,
     ) -> Result<(), LyonTranslationError> {
-        self.nodes.push(NodeKind::Path(
+        self.nodes.push(usvg::Node::new(NodeKind::Path(
             lyon_path_to_svg_with_attributes(path, fill, stroke, transform)
                 .ok_or(LyonTranslationError::SvgFailure)?,
-        ));
+        )));
         Ok(())
     }
 
@@ -139,12 +139,10 @@ impl<T> LyonWriter<T> {
     ///
     /// For writing Text, call first [`Self::add_fonts`] and call `push_text` instead.
     pub fn push_node(&mut self, node: NodeKind) {
-        self.nodes.push(node);
+        self.nodes.push(usvg::Node::new(node));
     }
 
-    /// Push an vector (formatted by the caller) as a PNG.
-    ///
-    /// For writing Text, call first [`Self::add_fonts`] and call `push_text` instead.
+    /// Push a raster image (formatted by the caller) as a PNG.
     pub fn push_png(
         &mut self,
         data: &[u8],
@@ -152,18 +150,28 @@ impl<T> LyonWriter<T> {
         width: f32,
         height: f32,
     ) -> Result<(), LyonTranslationError> {
-        self.nodes.push(NodeKind::Image(usvg::Image {
-            id: "".to_string(),
-            kind: usvg::ImageKind::PNG(std::sync::Arc::new(data.into())),
+        self.nodes.push(usvg::Node::new(create_png_node(
+            data, transform, width, height,
+        )?));
+        Ok(())
+    }
+
+    /// Push a vector of nodes as the children of their own group (formatted by the caller).
+    ///
+    /// This is relevant for applying transforms to a set of elements.
+    pub fn push_group(
+        &mut self,
+        nodes: Vec<NodeKind>,
+        transform: SvgTransform,
+    ) -> Result<(), LyonTranslationError> {
+        let group_node = usvg::Node::new(NodeKind::Group(Group {
             transform,
-            visibility: usvg::Visibility::Visible,
-            view_box: ViewBox {
-                rect: NonZeroRect::from_xywh(transform.tx, transform.ty, width, height)
-                    .ok_or(LyonTranslationError::WrongBoundingBox)?,
-                aspect: AspectRatio::default(),
-            },
-            rendering_mode: ImageRendering::default(),
+            ..Default::default()
         }));
+        for node in nodes {
+            group_node.append(usvg::Node::new(node))
+        }
+        self.nodes.push(group_node);
         Ok(())
     }
 
@@ -175,11 +183,10 @@ impl<T> LyonWriter<T> {
 
     /// Build [`Tree`] before writing.
     fn prepare(mut self) -> Result<Tree, LyonTranslationError> {
-        let match_node = |node: &NodeKind| match node {
+        let match_node = |node: &usvg::Node| match &*node.borrow() {
             NodeKind::Path(path) => Some(path.data.bounds()),
-            NodeKind::Text(_text) => None,
             NodeKind::Image(usvg::Image { view_box: vbox, .. }) => Some(vbox.rect.to_rect()),
-            _ => unreachable!(),
+            NodeKind::Text(_) | NodeKind::Group(_) => None,
         };
         // calculate dimensions
         let (min_x, max_x, min_y, max_y) = self
@@ -221,18 +228,21 @@ impl<T> LyonWriter<T> {
         }));
 
         use std::cmp::Ordering::*;
-        self.nodes.sort_unstable_by(|a, b| match (a, b) {
-            (NodeKind::Image(_), _) => Greater,
-            (_, NodeKind::Image(_)) => Less,
-            (NodeKind::Text(_), NodeKind::Path(_)) => Greater,
-            (NodeKind::Path(_), NodeKind::Text(_)) => Less,
-            (NodeKind::Path(p1), NodeKind::Path(p2)) => (2 * p1.fill.is_some() as u8
-                + p1.stroke.is_some() as u8)
-                .cmp(&(2 * p2.fill.is_some() as u8 + p2.stroke.is_some() as u8)),
-            _ => Equal,
-        });
+        self.nodes
+            .sort_unstable_by(|a, b| match (&*a.borrow(), &*b.borrow()) {
+                (NodeKind::Group(_), _) => Greater,
+                (_, NodeKind::Group(_)) => Less,
+                (NodeKind::Image(_), _) => Greater,
+                (_, NodeKind::Image(_)) => Less,
+                (NodeKind::Text(_), NodeKind::Path(_)) => Greater,
+                (NodeKind::Path(_), NodeKind::Text(_)) => Less,
+                (NodeKind::Path(p1), NodeKind::Path(p2)) => (2 * p1.fill.is_some() as u8
+                    + p1.stroke.is_some() as u8)
+                    .cmp(&(2 * p2.fill.is_some() as u8 + p2.stroke.is_some() as u8)),
+                _ => Equal,
+            });
         for path in self.nodes {
-            group_node.append(usvg::Node::new(path));
+            group_node.append(path);
         }
         root_node.append(group_node);
 
@@ -271,6 +281,94 @@ impl<T> LyonWriter<T> {
     }
 }
 
+/// Utility function to create [`usvg::Image`] elements.
+///
+/// If no grouping is needed, [`LyonWriter::push_png`] is recommended instead.
+pub fn create_png_node(
+    data: &[u8],
+    transform: SvgTransform,
+    width: f32,
+    height: f32,
+) -> Result<NodeKind, LyonTranslationError> {
+    Ok(NodeKind::Image(usvg::Image {
+        id: "".to_string(),
+        kind: usvg::ImageKind::PNG(std::sync::Arc::new(data.into())),
+        transform: SvgTransform::identity(),
+        visibility: usvg::Visibility::Visible,
+        view_box: ViewBox {
+            rect: NonZeroRect::from_xywh(transform.tx, transform.ty, width, height)
+                .ok_or(LyonTranslationError::WrongBoundingBox)?,
+            aspect: AspectRatio::default(),
+        },
+        rendering_mode: ImageRendering::default(),
+    }))
+}
+
+/// Utility function to create [`Text`] elements.
+///
+/// If no grouping is needed, [`LyonWriter::push_text`] is recommended instead.
+pub fn create_text_node(
+    text: String,
+    transform: SvgTransform,
+    fill: Option<Fill>,
+    stroke: Option<Stroke>,
+    font_families: Vec<String>,
+    font_size: f32,
+) -> Result<NodeKind, LyonTranslationError> {
+    let text_len = text.len();
+    Ok(NodeKind::Text(Text {
+        id: "".to_string(),
+        positions: (0..text_len)
+            .map(|c| CharacterPosition {
+                x: Some(c as f32),
+                y: None,
+                dx: None,
+                dy: None,
+            })
+            .collect(),
+        rotate: Vec::new(),
+        transform,
+        rendering_mode: TextRendering::GeometricPrecision,
+        writing_mode: WritingMode::LeftToRight,
+        chunks: vec![TextChunk {
+            x: None,
+            y: None,
+            text,
+            anchor: TextAnchor::Start,
+            text_flow: usvg::TextFlow::Linear,
+            spans: vec![TextSpan {
+                start: 0,
+                end: text_len,
+                fill,
+                stroke,
+                paint_order: PaintOrder::FillAndStroke,
+                font: Font {
+                    families: font_families,
+                    style: usvg::FontStyle::Normal,
+                    stretch: usvg::FontStretch::Normal,
+                    weight: 1,
+                },
+                font_size: NonZeroPositiveF32::new(font_size)
+                    .ok_or(LyonTranslationError::FontFailure)?,
+                small_caps: false,
+                apply_kerning: false,
+                decoration: usvg::TextDecoration {
+                    underline: None,
+                    overline: None,
+                    line_through: None,
+                },
+                baseline_shift: Vec::new(),
+                letter_spacing: 0.0,
+                word_spacing: 0.0,
+                text_length: None,
+                length_adjust: LengthAdjust::SpacingAndGlyphs,
+                visibility: usvg::Visibility::Visible,
+                dominant_baseline: DominantBaseline::Auto,
+                alignment_baseline: AlignmentBaseline::Auto,
+            }],
+        }],
+    }))
+}
 /// Marker struct for [`LyonWriter`] that indicates that no [`Text`] node has been added
 /// so far. It disallows `push_text` and does not convert [`Text`] to [`SvgPath`] upon write.
 pub struct NoText;
@@ -362,59 +460,14 @@ impl<T: FontProvider> LyonWriter<Option<T>> {
         fill: Option<Fill>,
         stroke: Option<Stroke>,
     ) -> Result<(), LyonTranslationError> {
-        let text_len = text.len();
-        self.nodes.push(NodeKind::Text(Text {
-            id: "".to_string(),
-            positions: (0..text_len)
-                .map(|c| CharacterPosition {
-                    x: Some(c as f32),
-                    y: None,
-                    dx: None,
-                    dy: None,
-                })
-                .collect(),
-            rotate: Vec::new(),
+        self.nodes.push(usvg::Node::new(create_text_node(
+            text,
             transform,
-            rendering_mode: TextRendering::GeometricPrecision,
-            writing_mode: WritingMode::LeftToRight,
-            chunks: vec![TextChunk {
-                x: None,
-                y: None,
-                text,
-                anchor: TextAnchor::Start,
-                text_flow: usvg::TextFlow::Linear,
-                spans: vec![TextSpan {
-                    start: 0,
-                    end: text_len,
-                    fill,
-                    stroke,
-                    paint_order: PaintOrder::FillAndStroke,
-                    font: Font {
-                        families: font_families,
-                        style: usvg::FontStyle::Normal,
-                        stretch: usvg::FontStretch::Normal,
-                        weight: 1,
-                    },
-                    font_size: NonZeroPositiveF32::new(font_size)
-                        .ok_or(LyonTranslationError::FontFailure)?,
-                    small_caps: false,
-                    apply_kerning: false,
-                    decoration: usvg::TextDecoration {
-                        underline: None,
-                        overline: None,
-                        line_through: None,
-                    },
-                    baseline_shift: Vec::new(),
-                    letter_spacing: 0.0,
-                    word_spacing: 0.0,
-                    text_length: None,
-                    length_adjust: LengthAdjust::SpacingAndGlyphs,
-                    visibility: usvg::Visibility::Visible,
-                    dominant_baseline: DominantBaseline::Auto,
-                    alignment_baseline: AlignmentBaseline::Auto,
-                }],
-            }],
-        }));
+            fill,
+            stroke,
+            font_families,
+            font_size,
+        )?));
         Ok(())
     }
 
@@ -590,7 +643,7 @@ mod tests {
             .expect("Path 2 should be writable!");
         writer.write(file_path).expect("Writing should not panic!");
 
-        std::fs::remove_file(&file_path).unwrap();
+        std::fs::remove_file(file_path).unwrap();
     }
 
     #[test]
@@ -630,6 +683,6 @@ mod tests {
             .expect("Text should be writable!");
         // finally, write the SVG, Text with be converted to SvgPath
         writer.write(file_path).expect("Writing should not panic!");
-        std::fs::remove_file(&file_path).unwrap();
+        std::fs::remove_file(file_path).unwrap();
     }
 }
