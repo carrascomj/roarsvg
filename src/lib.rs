@@ -9,12 +9,11 @@ use lyon_path::{Event, Path};
 use usvg::fontdb::Source;
 use usvg::tiny_skia_path::{Path as PathData, PathBuilder};
 use usvg::{
-    AlignmentBaseline, AspectRatio, CharacterPosition, DominantBaseline, Font, Group,
-    ImageRendering, LengthAdjust, NodeExt, NonZeroPositiveF32, NonZeroRect, Opacity, Paint,
-    PaintOrder, Path as SvgPath, Size, TextAnchor, TextChunk, TextRendering, TextSpan,
-    TreeTextToPath, ViewBox, WritingMode,
+    AlignmentBaseline, AspectRatio, CharacterPosition, Font, Group, ImageRendering, LengthAdjust,
+    NodeExt, NonZeroPositiveF32, NonZeroRect, Opacity, Paint, PaintOrder, Path as SvgPath, Size,
+    TextAnchor, TextChunk, TextRendering, TextSpan, TreeTextToPath, ViewBox, WritingMode,
 };
-pub use usvg::{Color, Fill, NodeKind, Stroke, Transform as SvgTransform};
+pub use usvg::{Color, DominantBaseline, Fill, NodeKind, Stroke, Transform as SvgTransform};
 use usvg::{StrokeWidth, Text, Tree};
 mod io;
 use io::to_file;
@@ -320,6 +319,7 @@ pub fn create_text_node(
     stroke: Option<Stroke>,
     font_families: Vec<String>,
     font_size: f32,
+    dominant_baseline: DominantBaseline,
 ) -> Result<NodeKind, LyonTranslationError> {
     let text_len = text.len();
     Ok(NodeKind::Text(Text {
@@ -369,7 +369,7 @@ pub fn create_text_node(
                 text_length: None,
                 length_adjust: LengthAdjust::SpacingAndGlyphs,
                 visibility: usvg::Visibility::Visible,
-                dominant_baseline: DominantBaseline::Auto,
+                dominant_baseline,
                 alignment_baseline: AlignmentBaseline::Auto,
             }],
         }],
@@ -440,7 +440,7 @@ impl<T: FontProvider> LyonWriter<Option<T>> {
     /// # Example
     ///
     /// ```
-    /// use roarsvg::{Color, LyonWriter, SvgTransform, fill, stroke};
+    /// use roarsvg::{Color, DominantBaseline, LyonWriter, SvgTransform, fill, stroke};
     /// use lyon_path::Path;
     /// use lyon_path::geom::euclid::Point2D;
     ///
@@ -476,6 +476,7 @@ impl<T: FontProvider> LyonWriter<Option<T>> {
     ///         SvgTransform::from_translate(0., 0.),
     ///         Some(fill(usvg::Color::black(), 1.0)),
     ///         Some(stroke(usvg::Color::black(), 1.0, 1.0)),
+    ///         DominantBaseline::Auto,
     ///     )
     ///     .expect("Text should be writable!");
     /// let mut path_builder = Path::builder();
@@ -492,6 +493,7 @@ impl<T: FontProvider> LyonWriter<Option<T>> {
         transform: SvgTransform,
         fill: Option<Fill>,
         stroke: Option<Stroke>,
+        dominant_baseline: DominantBaseline,
     ) -> Result<(), LyonTranslationError> {
         self.nodes.push(usvg::Node::new(create_text_node(
             text,
@@ -500,6 +502,7 @@ impl<T: FontProvider> LyonWriter<Option<T>> {
             stroke,
             font_families,
             font_size,
+            dominant_baseline,
         )?));
         Ok(())
     }
@@ -722,6 +725,7 @@ mod tests {
                 SvgTransform::from_translate(0., 0.),
                 Some(fill(usvg::Color::black(), 1.0)),
                 Some(stroke(usvg::Color::black(), 1.0, 1.0)),
+                DominantBaseline::Auto,
             )
             .expect("Text should be writable!");
         // finally, write the SVG, Text with be converted to SvgPath
