@@ -97,34 +97,6 @@ pub fn fill(color: Color, opacity: f32) -> Fill {
     }
 }
 
-fn min_an_max(
-    (min_x, max_x, min_y, max_y): (f32, f32, f32, f32),
-    bound: usvg::Rect,
-) -> (f32, f32, f32, f32) {
-    (
-        if min_x <= bound.left() {
-            min_x
-        } else {
-            bound.left()
-        },
-        if max_x >= bound.right() {
-            max_x
-        } else {
-            bound.right()
-        },
-        if min_y <= bound.top() {
-            min_y
-        } else {
-            bound.top()
-        },
-        if max_y >= bound.bottom() {
-            max_y
-        } else {
-            bound.bottom()
-        },
-    )
-}
-
 impl<T> LyonWriter<T> {
     /// Add a [`Path`] to the writer and translate it (eager).
     pub fn push(
@@ -189,25 +161,57 @@ impl<T> LyonWriter<T> {
 
     /// Build [`Tree`] before writing.
     fn prepare(mut self) -> Result<Tree, LyonTranslationError> {
-        let match_node = |node: &usvg::Node| node.calculate_bbox();
-        // calculate dimensions
+        // get the global transform to apply to each node's bbox
+        let global_transform = self.global_transform.unwrap_or_default();
+        // calculate transformed dimensions
         let (min_x, max_x, min_y, max_y) = self
             .nodes
             .iter()
-            .filter_map(match_node)
-            .fold((0f32, 0f32, 0f32, 0f32), min_an_max);
-        let width = if max_x - min_x > 0. {
+            .filter_map(|node| node.calculate_bbox())
+            .flat_map(|bbox| {
+                // we need to adjust the calculate_bbox coordinates
+                // to account for post_* (global_transform) operations
+                let corners = [
+                    (bbox.left(), bbox.top()),     // top-left
+                    (bbox.right(), bbox.top()),    // top-right
+                    (bbox.left(), bbox.bottom()),  // bottom-left
+                    (bbox.right(), bbox.bottom()), // bottom-right
+                ];
+
+                // transform each corner and expand to individual points
+                corners.into_iter().map(move |(x, y)| {
+                    let mut point = usvg::tiny_skia_path::Point::from((x, y));
+                    global_transform.map_point(&mut point);
+                    point
+                })
+            })
+            .fold(
+                (
+                    f32::INFINITY,
+                    f32::NEG_INFINITY,
+                    f32::INFINITY,
+                    f32::NEG_INFINITY,
+                ),
+                |(mut min_x, mut max_x, mut min_y, mut max_y), point| {
+                    min_x = min_x.min(point.x);
+                    max_x = max_x.max(point.x);
+                    min_y = min_y.min(point.y);
+                    max_y = max_y.max(point.y);
+                    (min_x, max_x, min_y, max_y)
+                },
+            );
+
+        // Rest of the function remains the same...
+        let width = if max_x - min_x > 0.0 {
             max_x - min_x
         } else {
             256.0
         };
-        let height = if max_y - min_y > 0. {
+        let height = if max_y - min_y > 0.0 {
             max_y - min_y
         } else {
             256.0
         };
-
-        // the root node of a tree must be a Group
         let root_node = usvg::Node::new(NodeKind::Group(Group::default()));
         // we append everything to a "real" group node
         let group_node = usvg::Node::new(NodeKind::Group(Group {
