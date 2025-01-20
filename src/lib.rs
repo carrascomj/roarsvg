@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use lyon_path::{Event, Path};
 
+use usvg::fontdb::Source;
 use usvg::tiny_skia_path::{Path as PathData, PathBuilder};
 use usvg::{
     AlignmentBaseline, AspectRatio, CharacterPosition, DominantBaseline, Font, Group,
@@ -400,10 +401,10 @@ impl LyonWriter<NoText> {
     /// Loads fonts from a font file, building a [`FontProvider`] and enabling writing text.
     pub fn add_fonts_source(
         self,
-        font_source: &[u8],
+        font_source: std::sync::Arc<Vec<u8>>,
     ) -> LyonWriter<Option<usvg::fontdb::Database>> {
         let mut fonts = usvg::fontdb::Database::new();
-        fonts.load_font_data(font_source.to_vec());
+        fonts.load_font_source(Source::Binary(font_source));
         LyonWriter {
             nodes: self.nodes,
             global_transform: self.global_transform,
@@ -506,10 +507,10 @@ impl<T: FontProvider> LyonWriter<Option<T>> {
     /// Loads fonts from a font file, building a [`FontProvider`] if needed and enabling writing text.
     pub fn add_fonts_source(
         self,
-        font_source: &[u8],
+        font_source: std::sync::Arc<Vec<u8>>,
     ) -> LyonWriter<Option<usvg::fontdb::Database>> {
         let mut fonts = self.fontdb.map(|f| f.get_fontdb()).unwrap_or_default();
-        fonts.load_font_data(font_source.to_vec());
+        fonts.load_font_source(Source::Binary(font_source));
         LyonWriter {
             nodes: self.nodes,
             global_transform: self.global_transform,
